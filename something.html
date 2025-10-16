@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Athlign - Football Scouting Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0d1117; color: #e5e7eb; }
+        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); }
+        .btn-primary { background-color: #238636; color: white; transition: all 0.2s; }
+        .btn-primary:hover { background-color: #2ea043; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4); }
+        .input-field { background-color: #0d1117; border-color: #30363d; color: #c9d1d9; }
+        .logo-text { font-weight: 800; color: #238636; letter-spacing: -1px; }
+        .bg-gradient-scout { background-image: linear-gradient(135deg, #238636, #0c4315); }
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #161b22; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+    </style>
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, updateDoc, writeBatch, setLogLevel, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase variables will be provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-athlign-app';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // appState is module-scoped, which caused the previous error when accessed directly from inline HTML.
+        const appState = {
+            view: 'auth', // 'auth', 'profileSetup', 'athleteDashboard', 'coachDashboard', 'drillPage'
+            userRole: null, // 'athlete' or 'coach'
+            tempRole: null, // Holds the selected role during profile setup until submitted
+            profile: null,
+            drills: {},
+            scoutingData: null,
+            currentDrillType: null, // for drillPage
+            recommendations: [],
+            loading: false,
+            message: null,
+            currentVideoFile: null,
+            offers: []
+        };
+        
+        // --- Utility Functions ---
+
+        // Converts a Date object to YYYY-MM-DD string
+        const dateToYMD = (date) => date.toISOString().split('T')[0];
+
+        // Handles exponential backoff for API calls (e.g., fetch)
+        async function fetchWithRetry(url, options = {}, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(HTTP error! status: ${response.status});
+                    return response;
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                }
+            }
+        }
+
+        /**
+         * Expose a function globally to safely update the module-scoped appState.tempRole
+         * This solves the ReferenceError by creating an accessible bridge to the module scope.
+         */
+        window.handleRoleChange = (selectElement) => {
+            appState.tempRole = selectElement.value;
+            window.render();
+        };
+
+
+        // --- Data Paths ---
+
+        const FIREBASE_COLLECTIONS = {
+            ATHLETE_PROFILES_PRIVATE: (uid) => artifacts/${appId}/users/${uid}/athlete_profile,
+            COACH_PROFILES_PRIVATE: (uid) => artifacts/${appId}/users/${uid}/coach_profile,
+            ATHLETE_PUBLIC_DATA: () => artifacts/${appId}/public/data/athletes,
+            COACH_REQUIREMENTS: (uid) => artifacts/${appId}/users/${uid}/coach_requirements,
+            SCOUTING_OFFERS: () => artifacts/${appId}/public/data/offers,
+        };
+
+        // --- AI Simulation (Placeholder) ---
+
+        /**
+         * Mocks the AI analysis of a video, generating scores and checking for deepfakes.
+         * @param {string} drillType - The type of drill (e.g., 'strength', 'speed').
+         * @returns {Promise<Object>} Mock AI results.
+         */
+        const simulateAIAnalysis = async (drillType) => {
+            const isDeepfake = Math.random() < 0.05; // 5% chance of deepfake
+            await new Promise(r => setTimeout(r, 2000)); // Simulate network delay
+
+            if (isDeepfake) {
+                return { deepfakeDetected: true, score: 0, feedback: "Video integrity check failed. Deepfake or excessive editing detected. Please re-upload an unedited recording." };
+            }
+
+            // Mock scores and feedback based on drill type
+            let score = Math.floor(Math.random() * 5) + 6; // Score 6-10
+
+            let feedback;
+            switch (drillType) {
+                case 'strength':
+                    feedback = Excellent form on push-ups and plank! Score is ${score}/10. Focus on a slower eccentric phase to improve strength further.;
+                    break;
+                case 'speed':
+                    feedback = Explosive acceleration! Time: 10m in 1.${(Math.random()*10).toFixed(1)}s, 20m in 3.${(Math.random()*10).toFixed(1)}s. Score is ${score}/10. Improve center of mass stability during the first 5 meters.;
+                    break;
+                case 'stamina':
+                    score = Math.floor(Math.random() * 3) + 7; // Higher avg score for stamina
+                    feedback = Consistent pacing maintained for 60 seconds. Heart rate stability suggests good endurance. Score is ${score}/10.;
+                    break;
+                case 'skill_juggling':
+                    score = Math.floor(Math.random() * 4) + 5; // Wider score range
+                    feedback = Juggling count: ${Math.floor(Math.random() * 50) + 10}. Good initial touch but needs more consistency under pressure. Score is ${score}/10.;
+                    break;
+                case 'skill_passing':
+                    feedback = Passing accuracy: ${Math.floor(Math.random() * 20) + 70}%. Technique is clean but improve power generation from the hip. Score is ${score}/10.;
+                    break;
+                case 'agility':
+                    feedback = Shuttle run time: ${(Math.random() * 2 + 10).toFixed(2)}s. Quick turns and low center of gravity. Score is ${score}/10.;
+                    break;
+            }
+
+            return {
+                deepfakeDetected: false,
+                score: score,
+                feedback: feedback,
+                analyzedAt: new Date().toISOString()
+            };
+        };
+
+        // --- Coach Matching Simulation ---
+
+        /**
+         * Mocks the AI matching system. Finds athletes whose highest scores meet the coach's requirements.
+         * This is a simple in-memory simulation for the preview.
+         */
+        const getMockRecommendations = async (requirements) => {
+            if (!db) return [];
+            
+            const q = query(collection(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA()));
+            let snapshot;
+            try {
+                snapshot = await getDocs(q);
+            } catch (error) {
+                console.error("Error fetching athlete data for recommendations:", error);
+                return [];
+            }
+            
+            const allAthletes = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            const recommendations = allAthletes.filter(athlete => {
+                // Ignore the current user if they are an athlete
+                if (athlete.id === userId) return false;
+
+                const aiScores = athlete.aiScores || {};
+                const maxStrength = Math.max(aiScores.strength?.score || 0, aiScores.strength2?.score || 0, aiScores.strength3?.score || 0);
+                const maxSpeed = Math.max(aiScores.speed?.score || 0, aiScores.speed2?.score || 0);
+                const maxStamina = aiScores.stamina?.score || 0;
+                const maxSkill = Math.max(aiScores.skill_juggling?.score || 0, aiScores.skill_passing?.score || 0);
+                const maxAgility = aiScores.agility?.score || 0;
+
+                const meetsStrength = maxStrength >= (requirements.strength || 0);
+                const meetsSpeed = maxSpeed >= (requirements.speed || 0);
+                const meetsStamina = maxStamina >= (requirements.stamina || 0);
+                const meetsSkill = maxSkill >= (requirements.skill || 0);
+                const meetsAgility = maxAgility >= (requirements.agility || 0);
+
+                // Only recommend active, non-scouted players who meet minimum criteria
+                return athlete.scoutingStatus === 'Active' && meetsStrength && meetsSpeed && meetsStamina && meetsSkill && meetsAgility;
+            });
+
+            return recommendations;
+        };
+
+
+        // --- Firebase Core Setup ---
+
+        /**
+         * Expose handleAuth globally so it can be called from the inline HTML onclick handler.
+         */
+        window.handleAuth = async () => {
+            if (!auth) return;
+
+            if (initialAuthToken) {
+                try {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } catch (error) {
+                    console.error("Custom token sign-in failed, falling back to anonymous:", error);
+                    await signInAnonymously(auth);
+                }
+            } else {
+                await signInAnonymously(auth);
+            }
+        };
+
+        const initializeFirebase = () => {
+            try {
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase configuration is missing or empty. Cannot initialize.");
+                    return;
+                }
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app); 
+                setLogLevel('Debug');
+                console.log("Firebase initialized.");
+
+                // Listener must be attached AFTER 'auth' is defined
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        await fetchAndSetUserRole();
+                    } else {
+                        userId = null;
+                        appState.userRole = null;
+                        appState.profile = null;
+                        isAuthReady = true;
+                        window.render();
+                    }
+                });
+
+                // Trigger the initial sign-in, which the listener above will catch
+                window.handleAuth(); // Use the globally exposed function
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+            }
+        };
+
+
+        // --- Data Fetching and Real-time Listeners ---
+
+        const fetchAndSetUserRole = async () => {
+            appState.loading = true;
+            window.render();
+
+            const athleteDocRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PROFILES_PRIVATE(userId), 'data');
+            const coachDocRef = doc(db, FIREBASE_COLLECTIONS.COACH_PROFILES_PRIVATE(userId), 'data');
+
+            const [athleteSnap, coachSnap] = await Promise.all([getDoc(athleteDocRef), getDoc(coachDocRef)]);
+
+            if (athleteSnap.exists()) {
+                appState.userRole = 'athlete';
+                appState.profile = athleteSnap.data();
+                setupAthleteListeners(appState.profile.fullName);
+            } else if (coachSnap.exists()) {
+                appState.userRole = 'coach';
+                appState.profile = coachSnap.data();
+                setupCoachListeners();
+            } else {
+                appState.userRole = null; // New user, needs profile setup
+                appState.view = 'profileSetup';
+                appState.loading = false;
+                isAuthReady = true;
+                window.render();
+                return;
+            }
+
+            appState.loading = false;
+            appState.view = appState.userRole === 'athlete' ? 'athleteDashboard' : 'coachDashboard';
+            isAuthReady = true;
+            window.render();
+        };
+
+        const setupAthleteListeners = (fullName) => {
+            // Listener for public scouting data (AI scores and status)
+            const publicDataRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), userId);
+            onSnapshot(publicDataRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    appState.scoutingData = data;
+                    appState.drills = data.aiScores || {};
+                    window.render();
+                } else {
+                    appState.scoutingData = null;
+                    appState.drills = {};
+                    window.render();
+                }
+            });
+
+            // Listener for scouting offers from coaches
+            const offersQuery = query(collection(db, FIREBASE_COLLECTIONS.SCOUTING_OFFERS()), where('athleteId', '==', userId));
+            onSnapshot(offersQuery, (snapshot) => {
+                const offers = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                appState.offers = offers;
+                window.render();
+            });
+        };
+
+        const setupCoachListeners = () => {
+            // Listener for coach requirements
+            const reqRef = doc(db, FIREBASE_COLLECTIONS.COACH_REQUIREMENTS(userId), 'data');
+            onSnapshot(reqRef, async (docSnap) => {
+                const requirements = docSnap.exists() ? docSnap.data() : {};
+                appState.requirements = requirements;
+                if (isAuthReady) {
+                    appState.recommendations = await getMockRecommendations(requirements);
+                }
+                window.render();
+            });
+        };
+
+
+        // --- Actions ---
+
+        window.handleSignOut = async () => {
+            try {
+                await signOut(auth);
+                appState.view = 'auth';
+                appState.profile = null;
+                appState.userRole = null;
+                appState.loading = false;
+                window.render();
+            } catch (error) {
+                console.error("Sign out error:", error);
+            }
+        };
+
+        window.submitProfile = async (event) => {
+            event.preventDefault();
+            appState.loading = true;
+            window.render();
+
+            const role = document.getElementById('role').value;
+            const form = event.target;
+
+            const profileData = {
+                role: role,
+                fullName: form.fullName.value,
+                dateOfBirth: form.dateOfBirth.value,
+                city: form.city.value,
+                phoneNumber: form.phoneNumber.value,
+                email: form.email.value,
+                governmentId: form.governmentId.value, // Aadhar/Govt ID
+                createdAt: new Date().toISOString(),
+                // Initial status for athlete
+                scoutingStatus: role === 'athlete' ? 'Active' : 'N/A',
+                // Placeholder for profile picture (Base64 or URL is preferred for real apps, mock it here)
+                profilePicture: 'https://placehold.co/100x100/161b22/e5e7eb?text=Avatar'
+            };
+
+            const privateDocPath = role === 'athlete'
+                ? FIREBASE_COLLECTIONS.ATHLETE_PROFILES_PRIVATE(userId)
+                : FIREBASE_COLLECTIONS.COACH_PROFILES_PRIVATE(userId);
+
+            const batch = writeBatch(db);
+            const privateDocRef = doc(db, privateDocPath, 'data');
+            batch.set(privateDocRef, profileData);
+
+            if (role === 'athlete') {
+                profileData.position = form.position.value;
+                profileData.isCaptain = form.isCaptain.checked;
+                // Public data for scouting
+                const publicDocRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), userId);
+                batch.set(publicDocRef, {
+                    athleteId: userId,
+                    fullName: profileData.fullName,
+                    position: profileData.position,
+                    city: profileData.city,
+                    scoutingStatus: 'Active',
+                    aiScores: {}
+                });
+            } else {
+                // Coach specific fields
+                profileData.academy = form.academy.value;
+                profileData.experience = form.experience.value;
+                profileData.specialty = form.specialty.value;
+            }
+
+            try {
+                await batch.commit();
+                // Clear tempRole after successful submission
+                appState.tempRole = null; 
+                await fetchAndSetUserRole(); // Reload data and switch view
+                appState.message = { type: 'success', text: Welcome, ${profileData.fullName}! Profile setup complete. ID: ${userId} };
+            } catch (error) {
+                console.error("Error submitting profile:", error);
+                appState.message = { type: 'error', text: 'Error saving profile data.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        window.uploadDrillVideo = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const videoFile = form.videoFile.files[0];
+            const drillType = appState.currentDrillType;
+
+            if (!videoFile || !drillType) {
+                appState.message = { type: 'error', text: 'Please select a video file and ensure the drill type is set.' };
+                window.render();
+                return;
+            }
+
+            appState.loading = true;
+            window.render();
+
+            try {
+                // 1. Simulate Deepfake Check and AI Analysis
+                const aiResult = await simulateAIAnalysis(drillType);
+                
+                // Determine a unique key for the score (e.g., strength1, strength2, skill_juggling)
+                let scoreKey = drillType;
+                if (drillType === 'strength') scoreKey = 'strength' + (Object.keys(appState.drills).filter(k => k.startsWith('strength')).length + 1);
+                if (drillType === 'speed') scoreKey = 'speed' + (Object.keys(appState.drills).filter(k => k.startsWith('speed')).length + 1);
+
+                if (aiResult.deepfakeDetected) {
+                    appState.message = { type: 'error', text: aiResult.feedback };
+                    return; // Stop processing if deepfake detected
+                }
+
+                // 2. Save AI Results to Public Firestore Document
+                const publicDocRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), userId);
+
+                await updateDoc(publicDocRef, {
+                    // Store video reference (mocked here, in a real app this would be a Storage URL)
+                    [aiScores.${scoreKey}]: {
+                        score: aiResult.score,
+                        feedback: aiResult.feedback,
+                        videoName: videoFile.name,
+                        analyzedAt: aiResult.analyzedAt
+                    }
+                });
+
+                appState.message = { type: 'success', text: Drill uploaded and AI analysis complete! Score: ${aiResult.score}/10. };
+                appState.view = 'athleteDashboard';
+            } catch (error) {
+                console.error("Drill upload error:", error);
+                appState.message = { type: 'error', text: 'An error occurred during video processing.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        window.setRequirements = async (event) => {
+            event.preventDefault();
+            appState.loading = true;
+            window.render();
+
+            const form = event.target;
+            const requirements = {
+                strength: parseInt(form.strength.value, 10),
+                speed: parseInt(form.speed.value, 10),
+                stamina: parseInt(form.stamina.value, 10),
+                skill: parseInt(form.skill.value, 10),
+                agility: parseInt(form.agility.value, 10),
+            };
+
+            const reqRef = doc(db, FIREBASE_COLLECTIONS.COACH_REQUIREMENTS(userId), 'data');
+
+            try {
+                await setDoc(reqRef, requirements, { merge: true });
+                appState.message = { type: 'success', text: 'Scouting requirements updated successfully. Matching new players...' };
+                appState.recommendations = await getMockRecommendations(requirements);
+            } catch (error) {
+                console.error("Error setting requirements:", error);
+                appState.message = { type: 'error', text: 'Failed to update requirements.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        window.handleScoutDecision = async (athleteId, decision) => {
+            appState.loading = true;
+            window.render();
+
+            try {
+                if (decision === 'reject') {
+                    // Log rejection (simple implementation for demo)
+                    const athletePublicRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), athleteId);
+                    const athleteData = (await getDoc(athletePublicRef)).data() || {};
+                    const rejections = athleteData.rejections || [];
+                    
+                    await updateDoc(athletePublicRef, {
+                        rejections: [...rejections, { coachId: userId, coachName: appState.profile.fullName, timestamp: new Date().toISOString() }]
+                    });
+
+                    appState.message = { type: 'info', text: Athlete ${athleteId.substring(0, 8)}... rejected. };
+                } else if (decision === 'scout') {
+                    // Create an offer document
+                    const offerData = {
+                        coachId: userId,
+                        coachName: appState.profile.fullName,
+                        academy: appState.profile.academy,
+                        athleteId: athleteId,
+                        status: 'pending',
+                        timestamp: new Date().toISOString()
+                    };
+                    await addDoc(collection(db, FIREBASE_COLLECTIONS.SCOUTING_OFFERS()), offerData);
+                    appState.message = { type: 'success', text: Offer sent to Athlete ${athleteId.substring(0, 8)}... };
+                }
+                // Re-fetch recommendations to update the list (if needed)
+                appState.recommendations = await getMockRecommendations(appState.requirements);
+            } catch (error) {
+                console.error("Scout decision error:", error);
+                appState.message = { type: 'error', text: 'Failed to process scouting decision.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        window.handleAthleteOfferAction = async (offerId, coachId, action) => {
+            appState.loading = true;
+            window.render();
+            const offerRef = doc(db, FIREBASE_COLLECTIONS.SCOUTING_OFFERS(), offerId);
+            const athletePublicRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), userId);
+
+            try {
+                if (action === 'accept') {
+                    // 1. Update the accepted offer status
+                    await updateDoc(offerRef, { status: 'accepted' });
+
+                    const acceptedOffer = appState.offers.find(o => o.id === offerId);
+
+                    // 2. Mark athlete as 'Scouted' and note the academy
+                    await setDoc(athletePublicRef, {
+                        scoutingStatus: 'Scouted',
+                        scoutedByAcademy: acceptedOffer.academy,
+                        scoutedByCoach: acceptedOffer.coachName,
+                        scoutedDate: new Date().toISOString()
+                    }, { merge: true });
+
+                    // 3. Reject all other pending offers
+                    const batch = writeBatch(db);
+                    appState.offers.filter(o => o.id !== offerId && o.status === 'pending').forEach(o => {
+                        batch.update(doc(db, FIREBASE_COLLECTIONS.SCOUTING_OFFERS(), o.id), { status: 'rejected_by_athlete' });
+                    });
+                    await batch.commit();
+
+                    appState.message = { type: 'success', text: Congratulations! You accepted the offer from ${acceptedOffer.academy}. Scouting paused. };
+
+                } else if (action === 'decline') {
+                    await updateDoc(offerRef, { status: 'declined' });
+                    appState.message = { type: 'info', text: 'Offer declined. Your scouting status remains Active.' };
+                }
+            } catch (error) {
+                console.error("Offer action error:", error);
+                appState.message = { type: 'error', text: 'Failed to process offer action.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        window.toggleScouting = async (status) => {
+            appState.loading = true;
+            window.render();
+            const athletePublicRef = doc(db, FIREBASE_COLLECTIONS.ATHLETE_PUBLIC_DATA(), userId);
+            try {
+                const updateData = { scoutingStatus: status };
+                if (status === 'Active') {
+                    // Clear scouted info if returning to active
+                    updateData.scoutedByAcademy = null;
+                    updateData.scoutedByCoach = null;
+                    updateData.scoutedDate = null;
+                }
+                
+                await updateDoc(athletePublicRef, updateData);
+
+                appState.message = { type: 'info', text: Scouting status changed to ${status}. };
+            } catch (error) {
+                console.error("Toggle scouting error:", error);
+                appState.message = { type: 'error', text: 'Failed to update scouting status.' };
+            } finally {
+                appState.loading = false;
+                window.render();
+            }
+        };
+
+        // --- Render Functions (UI) ---
+
+        const App = document.getElementById('app');
+
+        const renderHeader = () => `
+            <header class="p-4 bg-[#161b22] border-b border-[#30363d] flex justify-between items-center sticky top-0 z-10">
+                <div class="flex items-center space-x-2">
+                    <svg class="w-8 h-8 text-[#238636]" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.5 10.5c.3 0 .5.2.5.5v2.5a.5.5 0 01-1 0v-2.5a.5.5 0 01.5-.5zM12 21c4.97 0 9-4.03 9-9s-4.03-9-9-9-9 4.03-9 9 4.03 9 9 9zM12 3a9 9 0 000 18zM12 14v1m0-8V6m-2 4h4m-2 5h.01"></path></svg>
+                    <span class="text-3xl logo-text">Athlign</span>
+                </div>
+                ${appState.userRole && isAuthReady ? `
+                    <div class="flex items-center space-x-4">
+                        <span class="hidden sm:inline text-sm text-gray-400">Welcome, ${appState.profile?.fullName || 'User'} (${appState.userRole})</span>
+                        <button onclick="handleSignOut()" class="px-3 py-1 text-sm rounded-full bg-red-700 hover:bg-red-600 text-white transition duration-200">
+                            Sign Out
+                        </button>
+                    </div>
+                ` : ''}
+            </header>
+        `;
+
+        const renderMessage = () => {
+            if (!appState.message) return '';
+            const color = appState.message.type === 'success' ? 'bg-green-700' : appState.message.type === 'error' ? 'bg-red-700' : 'bg-blue-700';
+            const html = `
+                <div class="fixed top-20 right-4 p-3 rounded-lg ${color} text-white shadow-xl z-50 transition-opacity duration-300">
+                    ${appState.message.text}
+                </div>
+            `;
+            // Clear message after display
+            setTimeout(() => { appState.message = null; window.render(); }, 5000);
+            return html;
+        };
+
+        const renderLoader = () => appState.loading ? `
+            <div class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-[#238636]"></div>
+            </div>
+        ` : '';
+
+        const renderAuthForm = () => `
+            <div class="min-h-screen flex items-center justify-center p-4">
+                <div class="card w-full max-w-md p-8">
+                    <h2 class="text-3xl font-bold mb-6 text-center text-white">Join Athlign</h2>
+                    <p class="text-gray-400 text-center mb-6">Create a new account or sign in to continue.</p>
+                    <button onclick="handleAuth()" class="w-full btn-primary py-3 rounded-lg text-lg font-semibold flex items-center justify-center space-x-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1m0-8V5"></path></svg>
+                        Sign In / Sign Up (Auto-Auth)
+                    </button>
+                    <p class="text-xs text-gray-500 mt-4 text-center">Your unique session ID will be automatically generated and secured by Firebase.</p>
+                </div>
+            </div>
+        `;
+
+        const renderProfileSetup = () => {
+            // Use the state variable to drive conditional rendering
+            const selectedRole = appState.tempRole;
+            const isAthlete = selectedRole === 'athlete';
+            
+            return `
+                <div class="container mx-auto max-w-3xl p-4 md:p-8">
+                    <div class="card p-6">
+                        <h2 class="text-3xl font-bold mb-6 text-white border-b border-[#30363d] pb-3">Complete Your Profile</h2>
+                        <p class="text-gray-400 mb-6">Select your role and provide your initial details to enter the portal. <span class="text-xs text-yellow-500">Your User ID: ${userId}</span></p>
+
+                        <form onsubmit="submitProfile(event)">
+                            <div class="mb-6">
+                                <label for="role" class="block text-sm font-medium text-gray-300 mb-2">I am signing up as:</label>
+                                <!-- onchange now calls the globally defined handleRoleChange -->
+                                <select id="role" name="role" onchange="handleRoleChange(this)" required class="w-full p-3 rounded-lg input-field appearance-none">
+                                    <option value="" ${!selectedRole ? 'selected' : ''}>-- Select Role --</option>
+                                    <option value="athlete" ${selectedRole === 'athlete' ? 'selected' : ''}>Athlete</option>
+                                    <option value="coach" ${selectedRole === 'coach' ? 'selected' : ''}>Coach</option>
+                                </select>
+                            </div>
+
+                            ${selectedRole ? `
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                    <input name="fullName" type="text" placeholder="Full Name" required class="w-full p-3 rounded-lg input-field" />
+                                    <input name="dateOfBirth" type="date" placeholder="Date of Birth" required class="w-full p-3 rounded-lg input-field" value="${dateToYMD(new Date('2000-01-01'))}"/>
+                                    <input name="city" type="text" placeholder="City / Address" required class="w-full p-3 rounded-lg input-field" />
+                                    <input name="phoneNumber" type="tel" placeholder="Phone Number" required class="w-full p-3 rounded-lg input-field" />
+                                    <input name="email" type="email" placeholder="Email Address" required class="w-full p-3 rounded-lg input-field" />
+                                    <input name="governmentId" type="text" placeholder="Aadhar Card / Govt ID" required class="w-full p-3 rounded-lg input-field" />
+                                </div>
+
+                                ${isAthlete ? `
+                                    <div class="mb-6 card p-4">
+                                        <h4 class="text-lg font-semibold text-white mb-3">Athlete Specifics</h4>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <select name="position" required class="w-full p-3 rounded-lg input-field appearance-none">
+                                                <option value="">-- Primary Position --</option>
+                                                <option value="Striker">Striker</option>
+                                                <option value="Winger">Winger</option>
+                                                <option value="Midfielder">Midfielder</option>
+                                                <option value="Defender">Defender</option>
+                                                <option value="Goalkeeper">Goalkeeper</option>
+                                            </select>
+                                            <div class="flex items-center space-x-3">
+                                                <input type="checkbox" id="isCaptain" name="isCaptain" class="form-checkbox h-5 w-5 text-[#238636] rounded border-[#30363d] bg-gray-700" />
+                                                <label for="isCaptain" class="text-gray-300">I am a team captain</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ` : `
+                                    <div class="mb-6 card p-4">
+                                        <h4 class="text-lg font-semibold text-white mb-3">Coach Specifics</h4>
+                                        <input name="academy" type="text" placeholder="Academy Name" required class="w-full p-3 rounded-lg input-field mb-4" />
+                                        <input name="experience" type="number" placeholder="Years of Coaching Experience" required class="w-full p-3 rounded-lg input-field mb-4" />
+                                        <input name="specialty" type="text" placeholder="Specialty (e.g., Tactical Analysis, Goalkeeping)" required class="w-full p-3 rounded-lg input-field" />
+                                    </div>
+                                `}
+
+                                <button type="submit" class="w-full btn-primary py-3 rounded-lg text-lg font-semibold">
+                                    Create Profile
+                                </button>
+                            ` : ''}
+                        </form>
+                    </div>
+                </div>
+            `;
+        };
+
+        window.goToDrillPage = (drillType) => {
+            appState.currentDrillType = drillType;
+            appState.view = 'drillPage';
+            window.render();
+        };
+
+        const renderDrillPage = () => {
+            const drillMap = {
+                'strength': {
+                    name: 'Strength Drills',
+                    instructions: 'Record yourself performing a perfect push-up for one minute, then crunches for one minute, and finally a perfect plank for one minute. Submit one continuous video.',
+                    subDrills: ['Push-ups (1 min)', 'Crunches (1 min)', 'Plank (1 min)'],
+                    keys: ['strength1']
+                },
+                'speed': {
+                    name: 'Speed Drills',
+                    instructions: 'Record yourself doing an un-edited sprint. The AI will clock the time taken to cover 10m and 20m from this video. Ensure the full distance is visible.',
+                    subDrills: ['10m Sprint', '20m Sprint'],
+                    keys: ['speed1']
+                },
+                'stamina': {
+                    name: 'Stamina Drill',
+                    instructions: 'Run at a similar, sustainable pace for exactly 1 minute. The AI will assess your pace consistency and stability.',
+                    subDrills: ['1 Minute Steady Run'],
+                    keys: ['stamina']
+                },
+                'skill_juggling': {
+                    name: 'Skill Drill: Ball Control (Juggling)',
+                    instructions: 'Record yourself juggling the football until the ball falls. The AI will assess your control and count the touches.',
+                    subDrills: ['Juggling (until fall)'],
+                    keys: ['skill_juggling']
+                },
+                'skill_passing': {
+                    name: 'Skill Drill: Passing',
+                    instructions: 'Record yourself performing one minute of continuous to-and-fro passing against a wall. The AI will analyze accuracy and pace.',
+                    subDrills: ['Wall Passing (1 min)'],
+                    keys: ['skill_passing']
+                },
+                'agility': {
+                    name: 'Agility Drill',
+                    instructions: 'Perform 5 shuttle runs (to-and-fro) with a distance of 5 meters between the ends. The AI will measure your turning speed and center of mass shift.',
+                    subDrills: ['5m Shuttle Runs'],
+                    keys: ['agility']
+                },
+            };
+
+            const drill = drillMap[appState.currentDrillType] || drillMap['strength'];
+            // Determine the key for the most recent or primary score
+            const scoreKeys = Object.keys(appState.drills).filter(k => k.startsWith(appState.currentDrillType)).sort().reverse();
+            const currentScoreData = scoreKeys.length > 0 ? appState.drills[scoreKeys[0]] : null;
+            
+            const drillKeys = Object.keys(appState.drills).filter(k => k.startsWith(appState.currentDrillType));
+
+            const renderPastResults = () => {
+                if (drillKeys.length === 0) return '';
+                
+                const sortedResults = drillKeys.map(key => ({
+                    key,
+                    ...appState.drills[key],
+                    date: new Date(appState.drills[key].analyzedAt)
+                })).sort((a, b) => b.date - a.date);
+
+                return `
+                    <div class="mb-6 card p-4">
+                        <h3 class="text-xl font-bold mb-3 text-white border-b border-[#30363d] pb-2">Past Analysis Results</h3>
+                        <div class="space-y-3 max-h-40 overflow-y-auto">
+                            ${sortedResults.map(res => `
+                                <div class="flex justify-between items-center text-sm border-b border-gray-700 last:border-b-0 pb-2">
+                                    <span class="font-semibold text-gray-300">${res.key.charAt(0).toUpperCase() + res.key.slice(1)} attempt</span>
+                                    <span class="text-lg font-bold ${res.score >= 8 ? 'text-green-400' : res.score >= 6 ? 'text-yellow-400' : 'text-red-400'}">${res.score}/10</span>
+                                    <span class="text-xs text-gray-500">${res.date.toLocaleDateString()}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            };
+
+            return `
+                <div class="container mx-auto max-w-3xl p-4 md:p-8">
+                    <div class="card p-6">
+                        <button onclick="appState.view='athleteDashboard'; window.render();" class="text-gray-400 hover:text-[#238636] mb-4 flex items-center">
+                            <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                            Back to Dashboard
+                        </button>
+                        <h2 class="text-3xl font-bold text-white mb-4">${drill.name}</h2>
+
+                        <div class="mb-6 bg-gray-800 p-4 rounded-lg">
+                            <h3 class="text-xl font-semibold text-gray-300 mb-2">Instructions:</h3>
+                            <p class="text-gray-400">${drill.instructions}</p>
+                            <ul class="list-disc list-inside text-gray-400 mt-3">
+                                ${drill.subDrills.map(d => <li>${d}</li>).join('')}
+                            </ul>
+                        </div>
+
+                        ${currentScoreData ? `
+                            <div class="mb-6 card p-4 border border-[#238636]">
+                                <h3 class="text-xl font-bold mb-2 text-[#4ade80]">Latest AI Analysis & Feedback</h3>
+                                <p class="text-3xl font-extrabold text-[#4ade80]">${currentScoreData.score}/10</p>
+                                <p class="text-gray-300 mt-2">${currentScoreData.feedback}</p>
+                                <p class="text-xs text-gray-500 mt-2">Analyzed on: ${new Date(currentScoreData.analyzedAt).toLocaleDateString()}</p>
+                            </div>
+                        ` : ''}
+
+                        ${renderPastResults()}
+
+                        <form onsubmit="uploadDrillVideo(event)">
+                            <label for="videoFile" class="block text-sm font-medium text-gray-300 mb-2">Upload New Video (Max 1MB for demo):</label>
+                            <input type="file" id="videoFile" name="videoFile" accept="video/*" required class="block w-full text-sm text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-[#30363d] file:text-white hover:file:bg-gray-700"/>
+
+                            <div class="mt-4 p-3 bg-red-900 bg-opacity-30 rounded-lg text-sm text-red-300 border border-red-700">
+                                <strong>Deepfake/Editing Guardrail:</strong> The AI will perform an integrity check on the video. Any significant editing will result in rejection. Upload an unedited recording.
+                            </div>
+
+                            <button type="submit" class="w-full btn-primary py-3 rounded-lg text-lg font-semibold mt-6">
+                                Upload & Start AI Analysis
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        };
+        
+        const renderAthleteDashboard = () => {
+            const p = appState.profile;
+            // SAFETY CHECK: Ensure profile data is present before attempting to render
+            if (!p) {
+                return <div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading athlete profile data...</div></div>;
+            }
+
+            const scoutingData = appState.scoutingData || {};
+            const drills = appState.drills || {};
+            const offers = appState.offers || [];
+            const isActive = scoutingData.scoutingStatus === 'Active';
+
+            const drillTypes = [
+                { type: 'strength', label: 'Strength', icon: '💪' },
+                { type: 'speed', label: 'Speed', icon: '💨' },
+                { type: 'stamina', label: 'Stamina', icon: '🔋' },
+                { type: 'skill_juggling', label: 'Juggling Skill', icon: '⚽' },
+                { type: 'skill_passing', label: 'Passing Skill', icon: '🎯' },
+                { type: 'agility', label: 'Agility', icon: '⚡' },
+            ];
+
+            const renderDrillCard = (drill) => {
+                const keys = Object.keys(drills).filter(k => k.startsWith(drill.type));
+                
+                let latestScore = null;
+                if (keys.length > 0) {
+                    // Find the most recent score if multiple exist for a type (e.g., strength1, strength2)
+                    latestScore = keys.map(key => drills[key])
+                                        .sort((a, b) => new Date(b.analyzedAt) - new Date(a.analyzedAt))[0];
+                }
+
+                const scoreText = latestScore ? ${latestScore.score}/10 : 'N/A';
+                const scoreColor = latestScore ? (latestScore.score >= 8 ? 'text-green-400' : latestScore.score >= 6 ? 'text-yellow-400' : 'text-red-400') : 'text-gray-500';
+
+                return `
+                    <div class="card p-4 flex flex-col justify-between hover:border-[#238636] transition duration-200">
+                        <div>
+                            <div class="text-3xl mb-2">${drill.icon}</div>
+                            <h3 class="text-lg font-semibold text-white">${drill.label}</h3>
+                            <p class="text-sm text-gray-400 mt-1">Uploads: ${keys.length}</p>
+                        </div>
+                        <div class="mt-4 flex justify-between items-center">
+                            <span class="text-2xl font-bold ${scoreColor}">${scoreText}</span>
+                            <button onclick="goToDrillPage('${drill.type}')" class="px-3 py-1 text-xs rounded-full bg-gray-700 hover:bg-gray-600 transition">
+                                View / Upload
+                            </button>
+                        </div>
+                    </div>
+                `;
+            };
+
+            const renderOfferCard = (offer) => {
+                const statusColor = {
+                    'pending': 'bg-yellow-800 text-yellow-300',
+                    'accepted': 'bg-green-800 text-green-300',
+                    'declined': 'bg-red-800 text-red-300',
+                    'rejected_by_athlete': 'bg-red-800 text-red-300'
+                }[offer.status] || 'bg-gray-700 text-gray-300';
+
+                return `
+                    <div class="card p-4 border border-[#30363d] flex justify-between items-center space-x-4">
+                        <div>
+                            <h4 class="text-lg font-bold text-white">${offer.coachName} from ${offer.academy}</h4>
+                            <p class="text-sm text-gray-400">Offer made on: ${new Date(offer.timestamp).toLocaleDateString()}</p>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span class="text-sm font-medium px-3 py-1 rounded-full ${statusColor}">${offer.status.toUpperCase()}</span>
+                            ${offer.status === 'pending' ? `
+                                <button onclick="handleAthleteOfferAction('${offer.id}', '${offer.coachId}', 'accept')" class="px-3 py-1 text-sm rounded-full bg-green-700 hover:bg-green-600 transition">Accept</button>
+                                <button onclick="handleAthleteOfferAction('${offer.id}', '${offer.coachId}', 'decline')" class="px-3 py-1 text-sm rounded-full bg-red-700 hover:bg-red-600 transition">Decline</button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            };
+
+            return `
+                <div class="container mx-auto p-4 md:p-8">
+                    <h1 class="text-4xl font-extrabold mb-6 text-white">Athlete Performance Dashboard</h1>
+                    
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                        <!-- Profile Card -->
+                        <div class="lg:col-span-1 card p-6 h-full bg-gradient-scout">
+                            <img src="${p.profilePicture}" alt="Profile" class="w-24 h-24 rounded-full mb-4 border-4 border-white">
+                            <h2 class="text-3xl font-bold text-white mb-1">${p.fullName}</h2>
+                            <p class="text-lg font-semibold text-gray-200 mb-3">${p.position} ${p.isCaptain ? '(Captain)' : ''}</p>
+                            <div class="text-sm text-gray-100 space-y-1">
+                                <p><span class="font-semibold">City:</span> ${p.city}</p>
+                                <p><span class="font-semibold">DOB:</span> ${new Date(p.dateOfBirth).toLocaleDateString()}</p>
+                                <p class="text-xs text-yellow-300 pt-2">Your ID: ${userId}</p>
+                            </div>
+                        </div>
+
+                        <!-- Scouting Status & Toggles -->
+                        <div class="lg:col-span-2 card p-6">
+                            <h3 class="text-2xl font-bold mb-3 text-white">Scouting Status</h3>
+                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 rounded-lg ${isActive ? 'bg-green-900 bg-opacity-30 border border-green-700' : scoutingData.scoutedByAcademy ? 'bg-blue-900 bg-opacity-30 border border-blue-700' : 'bg-gray-700 bg-opacity-30 border border-gray-600'}">
+                                
+                                <div>
+                                    <span class="text-xl font-extrabold ${isActive ? 'text-green-400' : 'text-blue-400'}">${scoutingData.scoutingStatus || 'Setup Needed'}</span>
+                                    <p class="text-sm text-gray-300 mt-1">
+                                        ${isActive 
+                                            ? 'Your profile is actively being reviewed by coaches based on your drill scores.' 
+                                            : scoutingData.scoutedByAcademy 
+                                                ? Scouted by ${scoutingData.scoutedByAcademy}. Toggle below to reactivate scouting.
+                                                : 'No scouting data yet. Upload drills to start.'
+                                        }
+                                    </p>
+                                </div>
+                                <div class="mt-4 sm:mt-0">
+                                    ${isActive 
+                                        ? <button onclick="toggleScouting('Paused')" class="px-4 py-2 text-sm rounded-full bg-red-700 hover:bg-red-600 text-white transition">Pause Scouting</button>
+                                        : <button onclick="toggleScouting('Active')" class="px-4 py-2 text-sm rounded-full bg-[#238636] hover:bg-[#4ade80] text-white transition">Reactivate Scouting</button>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Drills Section -->
+                    <div class="mb-8">
+                        <h3 class="text-2xl font-bold mb-4 text-white">Drill Scores & Video Analysis</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                            ${drillTypes.map(renderDrillCard).join('')}
+                        </div>
+                    </div>
+
+                    <!-- Offers Section -->
+                    <div class="mb-8">
+                        <h3 class="text-2xl font-bold mb-4 text-white">Scouting Offers (${offers.length})</h3>
+                        <div class="space-y-4">
+                            ${offers.length > 0 ? offers.map(renderOfferCard).join('') : `
+                                <div class="card p-6 text-center text-gray-400">
+                                    No scouting offers yet. Keep uploading drills to improve your visibility!
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+
+        const renderCoachDashboard = () => {
+            const p = appState.profile;
+            // SAFETY CHECK: Ensure profile data is present before attempting to render
+            if (!p) {
+                return <div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading coach profile data...</div></div>;
+            }
+            
+            const requirements = appState.requirements || {};
+            const recommendations = appState.recommendations || [];
+
+            const renderAthleteCard = (athlete) => {
+                const aiScores = athlete.aiScores || {};
+                const maxScore = (key) => Math.max(...Object.keys(aiScores).filter(k => k.startsWith(key)).map(k => aiScores[k]?.score || 0));
+
+                const scoreCard = (title, score) => `
+                    <div class="text-center p-2 rounded-lg bg-gray-700">
+                        <p class="text-xs text-gray-400">${title}</p>
+                        <p class="text-lg font-bold text-[#4ade80]">${score > 0 ? score : 'N/A'}</p>
+                    </div>
+                `;
+
+                return `
+                    <div class="card p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-3 sm:space-y-0">
+                        <div class="flex items-center space-x-4">
+                            <img src="https://placehold.co/60x60/161b22/e5e7eb?text=P" alt="Avatar" class="rounded-full border-2 border-[#238636]">
+                            <div>
+                                <h4 class="text-xl font-bold text-white">${athlete.fullName}</h4>
+                                <p class="text-sm text-gray-400">${athlete.position} | ${athlete.city}</p>
+                                <p class="text-xs text-yellow-500">ID: ${athlete.athleteId}</p>
+                                ${athlete.scoutedByAcademy ? <p class="text-red-400 text-sm font-semibold mt-1">Scouted by: ${athlete.scoutedByAcademy}</p> : ''}
+                            </div>
+                        </div>
+
+                        <!-- Scores -->
+                        <div class="flex space-x-2 text-sm">
+                            ${scoreCard('STR', maxScore('strength'))}
+                            ${scoreCard('SPD', maxScore('speed'))}
+                            ${scoreCard('STM', maxScore('stamina'))}
+                            ${scoreCard('SKL', maxScore('skill'))}
+                            ${scoreCard('AGL', maxScore('agility'))}
+                        </div>
+
+                        <!-- Actions -->
+                        <div class="flex space-x-2">
+                            <button onclick="handleScoutDecision('${athlete.athleteId}', 'scout')" class="px-3 py-1 text-sm rounded-full bg-[#238636] hover:bg-[#4ade80] transition">
+                                Scout Offer
+                            </button>
+                            <button onclick="handleScoutDecision('${athlete.athleteId}', 'reject')" class="px-3 py-1 text-sm rounded-full bg-red-700 hover:bg-red-600 transition">
+                                Reject
+                            </button>
+                        </div>
+                    </div>
+                `;
+            };
+
+            return `
+                <div class="container mx-auto p-4 md:p-8">
+                    <h1 class="text-4xl font-extrabold mb-6 text-white">Coach Scouting Portal</h1>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                        <!-- Coach Profile Card -->
+                        <div class="lg:col-span-1 card p-6 h-full">
+                            <img src="${p.profilePicture}" alt="Profile" class="w-20 h-20 rounded-full mb-3 border-2 border-white">
+                            <h2 class="text-2xl font-bold text-white mb-1">${p.fullName}</h2>
+                            <p class="text-lg text-[#4ade80] mb-2">${p.academy}</p>
+                            <p class="text-sm text-gray-400"><span class="font-semibold">Experience:</span> ${p.experience} Years</p>
+                            <p class="text-sm text-gray-400"><span class="font-semibold">Specialty:</span> ${p.specialty}</p>
+                            <p class="text-xs text-yellow-500 mt-2">ID: ${userId}</p>
+                        </div>
+
+                        <!-- Requirements Panel -->
+                        <div class="lg:col-span-2 card p-6">
+                            <h3 class="text-2xl font-bold text-white mb-4 border-b border-[#30363d] pb-2">Set Scouting Requirements (Min Score / 10)</h3>
+                            <form onsubmit="setRequirements(event)">
+                                <div class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-4">
+                                    ${['strength', 'speed', 'stamina', 'skill', 'agility'].map(key => `
+                                        <div>
+                                            <label for="${key}" class="block text-sm font-medium text-gray-400 capitalize">${key}</label>
+                                            <input name="${key}" type="number" min="1" max="10" value="${requirements[key] || 7}" required class="w-full p-2 rounded-lg input-field mt-1" />
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <button type="submit" class="w-full btn-primary py-2 rounded-lg text-lg font-semibold">
+                                    Update Requirements & Match
+                                </button>
+                                <p class="text-xs text-gray-500 mt-2">AI will match players who meet or exceed these minimum scores.</p>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Recommendations List -->
+                    <div class="card p-6">
+                        <h3 class="text-2xl font-bold text-white mb-4 border-b border-[#30363d] pb-2">Top Athlete Recommendations (${recommendations.length})</h3>
+                        <div class="space-y-4">
+                            ${recommendations.length > 0 ? recommendations.map(renderAthleteCard).join('') : `
+                                <p class="text-gray-400 text-center py-8">No athletes currently match your requirements or have uploaded sufficient drills. Try adjusting your criteria.</p>
+                            `}
+                        </div>
+                    </div>
+
+                </div>
+            `;
+        };
+
+        // --- Main Render Loop ---
+
+        window.render = () => {
+            let content;
+            if (!isAuthReady) {
+                // Show a loading screen if auth state hasn't been determined yet
+                content = <div class="min-h-screen flex items-center justify-center"><div class="text-xl text-gray-400">Initializing...</div></div>;
+            } else {
+                switch (appState.view) {
+                    case 'profileSetup':
+                        content = renderProfileSetup();
+                        break;
+                    case 'athleteDashboard':
+                        content = renderAthleteDashboard();
+                        break;
+                    case 'coachDashboard':
+                        content = renderCoachDashboard();
+                        break;
+                    case 'drillPage':
+                        content = renderDrillPage();
+                        break;
+                    case 'auth':
+                    default:
+                        content = renderAuthForm();
+                        break;
+                }
+            }
+
+
+            App.innerHTML = `
+                ${renderHeader()}
+                <main class="min-h-screen pb-10">
+                    ${renderLoader()}
+                    ${renderMessage()}
+                    ${content}
+                </main>
+            `;
+        };
+
+        // Initialize Firebase and start the application on window load
+        window.onload = function () {
+            initializeFirebase();
+        };
+    </script>
+</head>
+<body class="bg-gray-900 min-h-screen">
+    <div id="app">
+        <!-- Content will be rendered here by JavaScript -->
+    </div>
+</body>
+</html>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Athlign - Football Scouting Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0d1117; color: #e5e7eb; }
+        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); }
+        .btn-primary { background-color: #238636; color: white; transition: all 0.2s; }
+        .btn-primary:hover { background-color: #2ea043; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4); }
+        .input-field { background-color: #0d1117; border-color: #30363d; color: #c9d1d9; }
+        .logo-text { font-weight: 800; color: #238636; letter-spacing: -1px; }
+        .bg-gradient-scout { background-image: linear-gradient(135deg, #238636, #0c4315); }
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #161b22; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+    </style>
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, updateDoc, writeBatch, setLogLevel, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase variables will be provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-athlign-app';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // appState is module-scoped, which caused the previous error when accessed directly from inline HTML.
+        const appState = {
+            view: 'auth', // 'auth', 'profileSetup', 'athleteDashboard', 'coachDashboard', 'drillPage'
+            userRole: null, // 'athlete' or 'coach'
+            tempRole: null, // Holds the selected role during profile setup until submitted
+            profile: null,
+            drills: {},
+            scoutingData: null,
+            currentDrillType: null, // for drillPage
+            recommendations: [],
+            loading: false,
+            message: null,
+            currentVideoFile: null,
+            offers: []
+        };
+        
+        // --- Utility Functions ---
+
+        // Converts a Date object to YYYY-MM-DD string
+        const dateToYMD = (date) => date.toISOString().split('T')[0];
+
+        // Handles exponential backoff for API calls (e.g., fetch)
+        async function fetchWithRetry(url, options = {}, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(HTTP error! status: ${response.status});
+                    return response;
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+                }
+            }
+        }
+
+        /**
+         * Expose a function globally to safely update the module-scoped appState.tempRole
+         * This solves the ReferenceError by creating an accessible bridge to the module scope.
+         */
+        window.handleRoleChange = (selectElement) => {
+            appState.tempRole = selectElement.value;
+            window.render();
+        };
+
+
+        // --- Data Paths ---
+
+        const FIREBASE_COLLECTIONS = {
+            ATHLETE
