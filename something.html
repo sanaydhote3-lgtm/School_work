@@ -61,7 +61,7 @@
             for (let i = 0; i < retries; i++) {
                 try {
                     const response = await fetch(url, options);
-                    if (!response.ok) throw new Error(HTTP error! status: ${response.status});
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     return response;
                 } catch (error) {
                     if (i === retries - 1) throw error;
@@ -83,11 +83,11 @@
         // --- Data Paths ---
 
         const FIREBASE_COLLECTIONS = {
-            ATHLETE_PROFILES_PRIVATE: (uid) => artifacts/${appId}/users/${uid}/athlete_profile,
-            COACH_PROFILES_PRIVATE: (uid) => artifacts/${appId}/users/${uid}/coach_profile,
-            ATHLETE_PUBLIC_DATA: () => artifacts/${appId}/public/data/athletes,
-            COACH_REQUIREMENTS: (uid) => artifacts/${appId}/users/${uid}/coach_requirements,
-            SCOUTING_OFFERS: () => artifacts/${appId}/public/data/offers,
+            ATHLETE_PROFILES_PRIVATE: (uid) => `artifacts/${appId}/users/${uid}/athlete_profile`,
+            COACH_PROFILES_PRIVATE: (uid) => `artifacts/${appId}/users/${uid}/coach_profile`,
+            ATHLETE_PUBLIC_DATA: () => `artifacts/${appId}/public/data/athletes`,
+            COACH_REQUIREMENTS: (uid) => `artifacts/${appId}/users/${uid}/coach_requirements`,
+            SCOUTING_OFFERS: () => `artifacts/${appId}/public/data/offers`,
         };
 
         // --- AI Simulation (Placeholder) ---
@@ -111,24 +111,24 @@
             let feedback;
             switch (drillType) {
                 case 'strength':
-                    feedback = Excellent form on push-ups and plank! Score is ${score}/10. Focus on a slower eccentric phase to improve strength further.;
+                    feedback = `Excellent form on push-ups and plank! Score is ${score}/10. Focus on a slower eccentric phase to improve strength further.`;
                     break;
                 case 'speed':
-                    feedback = Explosive acceleration! Time: 10m in 1.${(Math.random()*10).toFixed(1)}s, 20m in 3.${(Math.random()*10).toFixed(1)}s. Score is ${score}/10. Improve center of mass stability during the first 5 meters.;
+                    feedback = `Explosive acceleration! Time: 10m in 1.${(Math.random()*10).toFixed(1)}s, 20m in 3.${(Math.random()*10).toFixed(1)}s. Score is ${score}/10. Improve center of mass stability during the first 5 meters.`;
                     break;
                 case 'stamina':
                     score = Math.floor(Math.random() * 3) + 7; // Higher avg score for stamina
-                    feedback = Consistent pacing maintained for 60 seconds. Heart rate stability suggests good endurance. Score is ${score}/10.;
+                    feedback = `Consistent pacing maintained for 60 seconds. Heart rate stability suggests good endurance. Score is ${score}/10.`;
                     break;
                 case 'skill_juggling':
                     score = Math.floor(Math.random() * 4) + 5; // Wider score range
-                    feedback = Juggling count: ${Math.floor(Math.random() * 50) + 10}. Good initial touch but needs more consistency under pressure. Score is ${score}/10.;
+                    feedback = `Juggling count: ${Math.floor(Math.random() * 50) + 10}. Good initial touch but needs more consistency under pressure. Score is ${score}/10.`;
                     break;
                 case 'skill_passing':
-                    feedback = Passing accuracy: ${Math.floor(Math.random() * 20) + 70}%. Technique is clean but improve power generation from the hip. Score is ${score}/10.;
+                    feedback = `Passing accuracy: ${Math.floor(Math.random() * 20) + 70}%. Technique is clean but improve power generation from the hip. Score is ${score}/10.`;
                     break;
                 case 'agility':
-                    feedback = Shuttle run time: ${(Math.random() * 2 + 10).toFixed(2)}s. Quick turns and low center of gravity. Score is ${score}/10.;
+                    feedback = `Shuttle run time: ${(Math.random() * 2 + 10).toFixed(2)}s. Quick turns and low center of gravity. Score is ${score}/10.`;
                     break;
             }
 
@@ -384,7 +384,7 @@
                 // Clear tempRole after successful submission
                 appState.tempRole = null; 
                 await fetchAndSetUserRole(); // Reload data and switch view
-                appState.message = { type: 'success', text: Welcome, ${profileData.fullName}! Profile setup complete. ID: ${userId} };
+                appState.message = { type: 'success', text: `Welcome, ${profileData.fullName}! Profile setup complete. ID: ${userId}` };
             } catch (error) {
                 console.error("Error submitting profile:", error);
                 appState.message = { type: 'error', text: 'Error saving profile data.' };
@@ -428,7 +428,7 @@
 
                 await updateDoc(publicDocRef, {
                     // Store video reference (mocked here, in a real app this would be a Storage URL)
-                    [aiScores.${scoreKey}]: {
+                    [`aiScores.${scoreKey}`]: {
                         score: aiResult.score,
                         feedback: aiResult.feedback,
                         videoName: videoFile.name,
@@ -436,7 +436,7 @@
                     }
                 });
 
-                appState.message = { type: 'success', text: Drill uploaded and AI analysis complete! Score: ${aiResult.score}/10. };
+                appState.message = { type: 'success', text: `Drill uploaded and AI analysis complete! Score: ${aiResult.score}/10.` };
                 appState.view = 'athleteDashboard';
             } catch (error) {
                 console.error("Drill upload error:", error);
@@ -491,7 +491,7 @@
                         rejections: [...rejections, { coachId: userId, coachName: appState.profile.fullName, timestamp: new Date().toISOString() }]
                     });
 
-                    appState.message = { type: 'info', text: Athlete ${athleteId.substring(0, 8)}... rejected. };
+                    appState.message = { type: 'info', text: `Athlete ${athleteId.substring(0, 8)}... rejected.` };
                 } else if (decision === 'scout') {
                     // Create an offer document
                     const offerData = {
@@ -503,7 +503,7 @@
                         timestamp: new Date().toISOString()
                     };
                     await addDoc(collection(db, FIREBASE_COLLECTIONS.SCOUTING_OFFERS()), offerData);
-                    appState.message = { type: 'success', text: Offer sent to Athlete ${athleteId.substring(0, 8)}... };
+                    appState.message = { type: 'success', text: `Offer sent to Athlete ${athleteId.substring(0, 8)}...` };
                 }
                 // Re-fetch recommendations to update the list (if needed)
                 appState.recommendations = await getMockRecommendations(appState.requirements);
@@ -544,7 +544,7 @@
                     });
                     await batch.commit();
 
-                    appState.message = { type: 'success', text: Congratulations! You accepted the offer from ${acceptedOffer.academy}. Scouting paused. };
+                    appState.message = { type: 'success', text: `Congratulations! You accepted the offer from ${acceptedOffer.academy}. Scouting paused.` };
 
                 } else if (action === 'decline') {
                     await updateDoc(offerRef, { status: 'declined' });
@@ -574,7 +574,7 @@
                 
                 await updateDoc(athletePublicRef, updateData);
 
-                appState.message = { type: 'info', text: Scouting status changed to ${status}. };
+                appState.message = { type: 'info', text: `Scouting status changed to ${status}.` };
             } catch (error) {
                 console.error("Toggle scouting error:", error);
                 appState.message = { type: 'error', text: 'Failed to update scouting status.' };
@@ -798,7 +798,7 @@
                             <h3 class="text-xl font-semibold text-gray-300 mb-2">Instructions:</h3>
                             <p class="text-gray-400">${drill.instructions}</p>
                             <ul class="list-disc list-inside text-gray-400 mt-3">
-                                ${drill.subDrills.map(d => <li>${d}</li>).join('')}
+                                ${drill.subDrills.map(d => `<li>${d}</li>`).join('')}
                             </ul>
                         </div>
 
@@ -834,7 +834,7 @@
             const p = appState.profile;
             // SAFETY CHECK: Ensure profile data is present before attempting to render
             if (!p) {
-                return <div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading athlete profile data...</div></div>;
+                return `<div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading athlete profile data...</div></div>`;
             }
 
             const scoutingData = appState.scoutingData || {};
@@ -861,7 +861,7 @@
                                         .sort((a, b) => new Date(b.analyzedAt) - new Date(a.analyzedAt))[0];
                 }
 
-                const scoreText = latestScore ? ${latestScore.score}/10 : 'N/A';
+                const scoreText = latestScore ? `${latestScore.score}/10` : 'N/A';
                 const scoreColor = latestScore ? (latestScore.score >= 8 ? 'text-green-400' : latestScore.score >= 6 ? 'text-yellow-400' : 'text-red-400') : 'text-gray-500';
 
                 return `
@@ -934,15 +934,15 @@
                                         ${isActive 
                                             ? 'Your profile is actively being reviewed by coaches based on your drill scores.' 
                                             : scoutingData.scoutedByAcademy 
-                                                ? Scouted by ${scoutingData.scoutedByAcademy}. Toggle below to reactivate scouting.
+                                                ? `Scouted by ${scoutingData.scoutedByAcademy}. Toggle below to reactivate scouting.`
                                                 : 'No scouting data yet. Upload drills to start.'
                                         }
                                     </p>
                                 </div>
                                 <div class="mt-4 sm:mt-0">
                                     ${isActive 
-                                        ? <button onclick="toggleScouting('Paused')" class="px-4 py-2 text-sm rounded-full bg-red-700 hover:bg-red-600 text-white transition">Pause Scouting</button>
-                                        : <button onclick="toggleScouting('Active')" class="px-4 py-2 text-sm rounded-full bg-[#238636] hover:bg-[#4ade80] text-white transition">Reactivate Scouting</button>
+                                        ? `<button onclick="toggleScouting('Paused')" class="px-4 py-2 text-sm rounded-full bg-red-700 hover:bg-red-600 text-white transition">Pause Scouting</button>`
+                                        : `<button onclick="toggleScouting('Active')" class="px-4 py-2 text-sm rounded-full bg-[#238636] hover:bg-[#4ade80] text-white transition">Reactivate Scouting</button>`
                                     }
                                 </div>
                             </div>
@@ -977,7 +977,7 @@
             const p = appState.profile;
             // SAFETY CHECK: Ensure profile data is present before attempting to render
             if (!p) {
-                return <div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading coach profile data...</div></div>;
+                return `<div class="container mx-auto p-4 md:p-8"><div class="card p-6 text-center text-gray-400">Loading coach profile data...</div></div>`;
             }
             
             const requirements = appState.requirements || {};
@@ -1002,7 +1002,7 @@
                                 <h4 class="text-xl font-bold text-white">${athlete.fullName}</h4>
                                 <p class="text-sm text-gray-400">${athlete.position} | ${athlete.city}</p>
                                 <p class="text-xs text-yellow-500">ID: ${athlete.athleteId}</p>
-                                ${athlete.scoutedByAcademy ? <p class="text-red-400 text-sm font-semibold mt-1">Scouted by: ${athlete.scoutedByAcademy}</p> : ''}
+                                ${athlete.scoutedByAcademy ? `<p class="text-red-400 text-sm font-semibold mt-1">Scouted by: ${athlete.scoutedByAcademy}</p>` : ''}
                             </div>
                         </div>
 
@@ -1083,7 +1083,7 @@
             let content;
             if (!isAuthReady) {
                 // Show a loading screen if auth state hasn't been determined yet
-                content = <div class="min-h-screen flex items-center justify-center"><div class="text-xl text-gray-400">Initializing...</div></div>;
+                content = `<div class="min-h-screen flex items-center justify-center"><div class="text-xl text-gray-400">Initializing...</div></div>`;
             } else {
                 switch (appState.view) {
                     case 'profileSetup':
@@ -1129,89 +1129,3 @@
 </body>
 </html>
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Athlign - Football Scouting Portal</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #0d1117; color: #e5e7eb; }
-        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); }
-        .btn-primary { background-color: #238636; color: white; transition: all 0.2s; }
-        .btn-primary:hover { background-color: #2ea043; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4); }
-        .input-field { background-color: #0d1117; border-color: #30363d; color: #c9d1d9; }
-        .logo-text { font-weight: 800; color: #238636; letter-spacing: -1px; }
-        .bg-gradient-scout { background-image: linear-gradient(135deg, #238636, #0c4315); }
-        /* Custom scrollbar for better aesthetics */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #161b22; }
-        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #4a5568; }
-    </style>
-    <!-- Firebase Imports -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, updateDoc, writeBatch, setLogLevel, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global Firebase variables will be provided by the environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-athlign-app';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let app, db, auth;
-        let userId = null;
-        let isAuthReady = false;
-
-        // appState is module-scoped, which caused the previous error when accessed directly from inline HTML.
-        const appState = {
-            view: 'auth', // 'auth', 'profileSetup', 'athleteDashboard', 'coachDashboard', 'drillPage'
-            userRole: null, // 'athlete' or 'coach'
-            tempRole: null, // Holds the selected role during profile setup until submitted
-            profile: null,
-            drills: {},
-            scoutingData: null,
-            currentDrillType: null, // for drillPage
-            recommendations: [],
-            loading: false,
-            message: null,
-            currentVideoFile: null,
-            offers: []
-        };
-        
-        // --- Utility Functions ---
-
-        // Converts a Date object to YYYY-MM-DD string
-        const dateToYMD = (date) => date.toISOString().split('T')[0];
-
-        // Handles exponential backoff for API calls (e.g., fetch)
-        async function fetchWithRetry(url, options = {}, retries = 3) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await fetch(url, options);
-                    if (!response.ok) throw new Error(HTTP error! status: ${response.status});
-                    return response;
-                } catch (error) {
-                    if (i === retries - 1) throw error;
-                    await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
-                }
-            }
-        }
-
-        /**
-         * Expose a function globally to safely update the module-scoped appState.tempRole
-         * This solves the ReferenceError by creating an accessible bridge to the module scope.
-         */
-        window.handleRoleChange = (selectElement) => {
-            appState.tempRole = selectElement.value;
-            window.render();
-        };
-
-
-        // --- Data Paths ---
-
-        const FIREBASE_COLLECTIONS = {
-            ATHLETE
